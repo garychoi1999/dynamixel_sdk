@@ -726,3 +726,266 @@ int Protocol1PacketHandler::bulkWriteTxOnly(PortHandler *port, uint8_t *param, u
 {
   return COMM_NOT_AVAILABLE;
 }
+
+int Protocol1PacketHandler::write_Vmode(PortHandler *port, uint16_t address, uint16_t data[], uint8_t *error)
+{
+  uint8_t A_anti = data[0] & (1 << 7);
+  uint8_t B_anti = data[1] & (1 << 7);
+  uint8_t C_anti = data[2] & (1 << 7);
+  uint8_t data_write_A[2] = { DXL_LOBYTE(data[0]), DXL_HIBYTE(data[0]) };
+  uint8_t data_write_B[2] = { DXL_LOBYTE(data[1]), DXL_HIBYTE(data[1]) };
+  uint8_t data_write_C[2] = { DXL_LOBYTE(data[2]), DXL_HIBYTE(data[2]) };
+
+  int result                  = COMM_TX_FAIL;
+
+  uint8_t *txpacket           = (uint8_t *)malloc(10);
+  //uint8_t *txpacket           = new uint8_t[length+7];
+  uint8_t rxpacket[6]         = {0};
+
+  txpacket[0]   =   0xFF;
+  txpacket[1]   =   0xFE;
+  txpacket[2]   =   0x02;
+  txpacket[3]   =   data_write_A[1];
+  txpacket[4]   =   data_write_A[0];
+  txpacket[5]   =   data_write_B[1];
+  txpacket[6]   =   data_write_B[0];
+  txpacket[7]   =   data_write_C[1];
+  txpacket[8]   =   data_write_C[0];
+  txpacket[9]   =   0x00 + (A_anti >> 5) + (B_anti >> 6) + (C_anti >> 7);
+
+  result = txRxPacket_Vmode(port, txpacket, rxpacket, error);
+
+  free(txpacket);
+  //delete[] txpacket;
+  return result;
+
+  //return writeTxRx(port, id, address, 2, data_write, error);
+}
+
+int Protocol1PacketHandler::txRxPacket_Vmode(PortHandler *port, uint8_t *txpacket, uint8_t *rxpacket, uint8_t *error)
+{
+  int result = COMM_TX_FAIL;
+
+  // tx packet
+  result = txPacket_Vmode(port, txpacket);
+  if (result != COMM_SUCCESS)
+    return result;
+
+  // (Instruction == BulkRead) == this function is not available.
+  //if(txpacket[PKT_INSTRUCTION] == INST_BULK_READ)
+  //  result = COMM_NOT_AVAILABLE;
+
+  // (ID == Broadcast ID) == no need to wait for status packet or not available
+  // (Instruction == action) == no need to wait for status packet
+  //if (txpacket[PKT_ID] == BROADCAST_ID || txpacket[PKT_INSTRUCTION] == INST_ACTION)
+  //{
+  //  port->is_using_ = false;
+  //  return result;
+  //}
+
+  // set packet timeout
+  //if (txpacket[PKT_INSTRUCTION] == INST_READ)
+  //{
+  //  port->setPacketTimeout((uint16_t)(txpacket[PKT_PARAMETER0+1] + 6));
+  //}
+  //else
+  //{
+  //  port->setPacketTimeout((uint16_t)6); // HEADER0 HEADER1 ID LENGTH ERROR CHECKSUM
+  //}
+
+  // rx packet
+  if (result == COMM_SUCCESS) {
+    result = rxPacket_Vmode(port, rxpacket);
+  }
+
+  if (result == COMM_SUCCESS)
+  {
+    if (error != 0)
+      *error = (uint8_t)rxpacket[PKT_ERROR];
+  }
+
+  return result;
+}
+
+
+int Protocol1PacketHandler::txPacket_Vmode(PortHandler *port, uint8_t *txpacket)
+{
+  //uint8_t checksum               = 0;
+  uint8_t total_packet_length    = 10;
+  uint8_t written_packet_length  = 0;
+
+  if (port->is_using_)
+    return COMM_PORT_BUSY;
+  port->is_using_ = true;
+
+  // check max packet length
+  if (total_packet_length > TXPACKET_MAX_LEN)
+  {
+    port->is_using_ = false;
+    return COMM_TX_ERROR;
+  }
+
+  // make packet header
+  //txpacket[PKT_HEADER0]   = 0xFF;
+  //txpacket[PKT_HEADER1]   = 0xFF;
+
+  // add a checksum to the packet
+  //for (uint16_t idx = 2; idx < total_packet_length - 1; idx++)   // except header, checksum
+  //  checksum += txpacket[idx];
+  //txpacket[total_packet_length - 1] = ~checksum;
+
+  // tx packet
+  port->clearPort();
+  written_packet_length = port->writePort(txpacket, total_packet_length);
+  if (total_packet_length != written_packet_length)
+  {
+    port->is_using_ = false;
+    return COMM_TX_FAIL;
+  }
+
+  return COMM_SUCCESS;
+}
+
+int Protocol1PacketHandler::rxPacket_Vmode(PortHandler *port, uint8_t *rxpacket)
+{
+  int     result         = COMM_TX_FAIL;
+
+  //uint8_t checksum       = 0;
+  uint8_t rx_length      = 0;
+  uint8_t wait_length    = 10;    // minimum length (HEADER0[FF] HEADER1[FE] A_Speed A_direction B_Speed B_direction C_Speed C_direction Z_HighByte Z_LowByte)
+
+  while(true)
+  {
+    rx_length += port->readPort(&rxpacket[rx_length], wait_length - rx_length);
+    if (rx_length >= wait_length)
+    {
+      uint8_t idx = 0;
+
+      // find packet header
+      for (idx = 0; idx < (rx_length - 1); idx++)
+      {
+        if (rxpacket[idx] == 0xFF && rxpacket[idx+1] == 0xFE)
+          break;
+      }
+
+      if (idx == 0)   // found at the beginning of the packet
+      {
+        /*if (rxpacket[PKT_ID] > 0xFD ||                  // unavailable ID
+            rxpacket[PKT_LENGTH] > RXPACKET_MAX_LEN ||  // unavailable Length
+            rxpacket[PKT_ERROR] > 0x7F)                 // unavailable Error
+        {
+            // remove the first byte in the packet
+            for (uint16_t s = 0; s < rx_length - 1; s++)
+              rxpacket[s] = rxpacket[1 + s];
+            //memcpy(&rxpacket[0], &rxpacket[idx], rx_length - idx);
+            rx_length -= 1;
+            continue;
+        }*/
+
+        /*// re-calculate the exact length of the rx packet
+        if (wait_length != rxpacket[PKT_LENGTH] + PKT_LENGTH + 1)
+        {
+          wait_length = rxpacket[PKT_LENGTH] + PKT_LENGTH + 1;
+          continue;
+        }*/
+
+        if (rx_length < wait_length)
+        {
+          // check timeout
+          if (port->isPacketTimeout() == true)
+          {
+            if (rx_length == 0)
+            {
+              result = COMM_RX_TIMEOUT;
+            }
+            else
+            {
+              result = COMM_RX_CORRUPT;
+            }
+            break;
+          }
+          else
+          {
+            continue;
+          }
+        }
+
+        result = COMM_SUCCESS;
+        break;
+
+        /*// calculate checksum
+        for (uint16_t i = 2; i < wait_length - 1; i++)   // except header, checksum
+          checksum += rxpacket[i];
+        checksum = ~checksum;
+
+        // verify checksum
+        if (rxpacket[wait_length - 1] == checksum)
+        {
+          result = COMM_SUCCESS;
+        }
+        else
+        {
+          result = COMM_RX_CORRUPT;
+        }*/
+        //break;
+
+      }
+      else
+      {
+        // remove unnecessary packets
+        for (uint16_t s = 0; s < rx_length - idx; s++)
+          rxpacket[s] = rxpacket[idx + s];
+        //memcpy(&rxpacket[0], &rxpacket[idx], rx_length - idx);
+        rx_length -= idx;
+      }
+    }
+    else
+    {
+      // check timeout
+      if (port->isPacketTimeout() == true)
+      {
+        if (rx_length == 0)
+        {
+          result = COMM_RX_TIMEOUT;
+        }
+        else
+        {
+          result = COMM_RX_CORRUPT;
+        }
+        break;
+      }
+    }
+  }
+  port->is_using_ = false;
+
+  return result;
+}
+
+int Protocol1PacketHandler::readTxRx_Vmode(PortHandler *port, uint16_t address, uint16_t *data, uint8_t *error)
+{
+  int result = COMM_RX_FAIL;
+  uint8_t *rxpacket = (uint8_t *)malloc(RXPACKET_MAX_LEN);//(length+6);
+  uint16_t pt = 0;
+  bool full_first = false, full_second = false;
+
+  while ((!full_first || !full_second) && pt < RXPACKET_MAX_LEN){
+    if (rxpacket[pt + address] == 0x100 && !full_first){
+        for (uint16_t i = 0; i < 8; i++)
+          data[i] = rxpacket[pt+address+1+i];
+        full_first = true;
+    }
+    if (rxpacket[pt + address] == 0x101 && !full_second){
+        for (uint16_t i = 0; i < 8; i++)
+          data[i+10] = rxpacket[pt+address+1+i];
+        full_first = true;
+    }
+    pt++;
+  }
+
+  //memcpy(data, &rxpacket[PKT_PARAMETER0], length);
+
+    free(rxpacket);
+    //delete[] rxpacket;
+
+  return result;
+}

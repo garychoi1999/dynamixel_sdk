@@ -29,6 +29,8 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <iostream>
+#include <inttypes.h>
 
 #define TXPACKET_MAX_LEN    (250)
 #define RXPACKET_MAX_LEN    (250)
@@ -607,12 +609,20 @@ int Protocol3PacketHandler::write2ByteTxRx(PortHandler *port, uint8_t id, uint16
 
 int Protocol3PacketHandler::write_Vmode(PortHandler *port, uint16_t address, uint16_t data[], uint8_t *error)
 {
-  uint8_t A_anti = data[0] & (1 << 7);
-  uint8_t B_anti = data[1] & (1 << 7);
-  uint8_t C_anti = data[2] & (1 << 7);
-  uint8_t data_write_A[2] = { DXL_LOBYTE(data[0]), DXL_HIBYTE(data[0]) };
-  uint8_t data_write_B[2] = { DXL_LOBYTE(data[1]), DXL_HIBYTE(data[1]) };
-  uint8_t data_write_C[2] = { DXL_LOBYTE(data[2]), DXL_HIBYTE(data[2]) };
+  uint8_t A_anti = ((data[0] & (1 << 10))>> 8);
+  uint8_t B_anti = ((data[1] & (1 << 10))>> 9);
+  uint8_t C_anti = ((data[2] & (1 << 10))>> 10);
+  
+  uint16_t A_store = ((data[0] & 0x3FF));
+  uint16_t B_store = ((data[1] & 0x3FF));
+  uint16_t C_store = ((data[2] & 0x3FF));
+	
+  uint8_t data_write_A[2] = { DXL_LOBYTE(A_store), DXL_HIBYTE(A_store) };
+  uint8_t data_write_B[2] = { DXL_LOBYTE(B_store), DXL_HIBYTE(B_store) };
+  uint8_t data_write_C[2] = { DXL_LOBYTE(C_store), DXL_HIBYTE(C_store) };
+
+
+
 
   int result                  = COMM_TX_FAIL;
 
@@ -629,7 +639,42 @@ int Protocol3PacketHandler::write_Vmode(PortHandler *port, uint16_t address, uin
   txpacket[6]   =   data_write_B[0];
   txpacket[7]   =   data_write_C[1];
   txpacket[8]   =   data_write_C[0];
-  txpacket[9]   =   0x00 + A_anti >> 5 + B_anti >> 6 + C_anti >> 7;
+  txpacket[9]   =   0x00 + A_anti + B_anti + C_anti;
+
+
+  /*for (int i = 0; i < 16; i++) {
+        printf("%d", (data[0] & 0x8000) >> 15);
+        data[0] <<= 1;
+    }
+  printf("\n");
+
+    for (int i = 0; i < 16; i++) {
+        printf("%d", (data[1] & 0x8000) >> 15);
+        data[1] <<= 1;
+    }
+  printf("\n");
+
+    for (int i = 0; i < 16; i++) {
+        printf("%d", (data[2] & 0x8000) >> 15);
+        data[2] <<= 1;
+    }
+  printf("\n");*/
+
+  //printf("Data 0 : %" PRIu16 "\n",data[0]);
+  //printf("Data 1 : %" PRIu16 "\n",data[1]);
+  //printf("Data 2 : %" PRIu16 "\n",data[2]);
+
+
+  /*std::cout << "1: " << +txpacket[0] << std::endl;
+  std::cout << "2: " << +txpacket[1] << std::endl;
+  std::cout << "3: " << +txpacket[2] << std::endl;
+  std::cout << "4: " << +txpacket[3] << std::endl;
+  std::cout << "5: " << +txpacket[4] << std::endl;
+  std::cout << "6: " << +txpacket[5] << std::endl;
+  std::cout << "7: " << +txpacket[6] << std::endl;
+  std::cout << "8: " << +txpacket[7] << std::endl;
+  std::cout << "9: " << +txpacket[8] << std::endl;
+  std::cout << "10: " << +txpacket[9] << std::endl;*/
 
   result = txRxPacket_Vmode(port, txpacket, rxpacket, error);
 
@@ -688,7 +733,7 @@ int Protocol3PacketHandler::txRxPacket_Vmode(PortHandler *port, uint8_t *txpacke
 
 int Protocol3PacketHandler::txPacket_Vmode(PortHandler *port, uint8_t *txpacket)
 {
-  uint8_t checksum               = 0;
+  //uint8_t checksum               = 0;
   uint8_t total_packet_length    = 10;
   uint8_t written_packet_length  = 0;
 
@@ -726,11 +771,11 @@ int Protocol3PacketHandler::txPacket_Vmode(PortHandler *port, uint8_t *txpacket)
 
 int Protocol3PacketHandler::rxPacket_Vmode(PortHandler *port, uint8_t *rxpacket)
 {
-  int     result         = COMM_TX_FAIL;
+   int     result         = COMM_TX_FAIL;
 
   uint8_t checksum       = 0;
   uint8_t rx_length      = 0;
-  uint8_t wait_length    = 10;    // minimum length (HEADER0[FF] HEADER1[FE] A_Speed A_direction B_Speed B_direction C_Speed C_direction Z_HighByte Z_LowByte)
+  uint8_t wait_length    = 10;    // minimum length (HEADER0 HEADER1 ID LENGTH ERROR CHKSUM)
 
   while(true)
   {
@@ -748,7 +793,7 @@ int Protocol3PacketHandler::rxPacket_Vmode(PortHandler *port, uint8_t *rxpacket)
 
       if (idx == 0)   // found at the beginning of the packet
       {
-        /*if (rxpacket[PKT_ID] > 0xFD ||                  // unavailable ID
+        if (rxpacket[PKT_ID] > 0xFD ||                  // unavailable ID
             rxpacket[PKT_LENGTH] > RXPACKET_MAX_LEN ||  // unavailable Length
             rxpacket[PKT_ERROR] > 0x7F)                 // unavailable Error
         {
@@ -758,14 +803,14 @@ int Protocol3PacketHandler::rxPacket_Vmode(PortHandler *port, uint8_t *rxpacket)
             //memcpy(&rxpacket[0], &rxpacket[idx], rx_length - idx);
             rx_length -= 1;
             continue;
-        }*/
+        }
 
-        /*// re-calculate the exact length of the rx packet
+        // re-calculate the exact length of the rx packet
         if (wait_length != rxpacket[PKT_LENGTH] + PKT_LENGTH + 1)
         {
           wait_length = rxpacket[PKT_LENGTH] + PKT_LENGTH + 1;
           continue;
-        }*/
+        }
 
         if (rx_length < wait_length)
         {
@@ -788,10 +833,7 @@ int Protocol3PacketHandler::rxPacket_Vmode(PortHandler *port, uint8_t *rxpacket)
           }
         }
 
-        result = COMM_SUCCESS;
-        break;
-
-        /*// calculate checksum
+        // calculate checksum
         for (uint16_t i = 2; i < wait_length - 1; i++)   // except header, checksum
           checksum += rxpacket[i];
         checksum = ~checksum;
@@ -804,9 +846,8 @@ int Protocol3PacketHandler::rxPacket_Vmode(PortHandler *port, uint8_t *rxpacket)
         else
         {
           result = COMM_RX_CORRUPT;
-        }*/
-        //break;
-
+        }
+        break;
       }
       else
       {
@@ -841,30 +882,49 @@ int Protocol3PacketHandler::rxPacket_Vmode(PortHandler *port, uint8_t *rxpacket)
 
 int Protocol3PacketHandler::readTxRx_Vmode(PortHandler *port, uint16_t address, uint16_t *data, uint8_t *error)
 {
-  int result = COMM_RX_FAIL;
-  uint8_t *rxpacket = (uint8_t *)malloc(RXPACKET_MAX_LEN);//(length+6);
-  uint16_t pt = 0;
-  bool full_first = false, full_second = false;
 
-  while ((!full_first || !full_second) && pt < RXPACKET_MAX_LEN){
-    if (rxpacket[pt + address] == 0x100 && !full_first){
-        for (uint16_t i = 0; i < 8; i++)
-          data[i] = rxpacket[pt+address+1+i];
-        full_first = true;
-    }
-    if (rxpacket[pt + address] == 0x101 && !full_second){
-        for (uint16_t i = 0; i < 8; i++)
-          data[i+10] = rxpacket[pt+address+1+i];
-        full_first = true;
-    }
-    pt++;
+  int result = COMM_TX_FAIL;
+
+  uint8_t *rxpacket           = (uint8_t *)malloc(RXPACKET_MAX_LEN);//(length+6);
+
+  // set packet timeout
+  port->setPacketTimeout((uint16_t)(10)); 
+
+  // rx packet
+  //do {
+    result = rxPacket_Vmode(port, rxpacket);
+  //} while (result == COMM_SUCCESS && txpacket[PKT_ID] != rxpacket[PKT_ID]);
+
+  /*if (result == COMM_SUCCESS && txpacket[PKT_ID] == rxpacket[PKT_ID])
+  {
+    if (error != 0)
+      *error = (uint8_t)rxpacket[PKT_ERROR];
   }
 
-  //memcpy(data, &rxpacket[PKT_PARAMETER0], length);
-
+  if (result == COMM_SUCCESS)
+  {
+    if (error != 0)
+    {
+      *error = (uint8_t)rxpacket[PKT_ERROR];
+    }*/
+  if (rxpacket[0] == 0xFF && rxpacket[1] == 0xFE){
+    for (uint16_t s = 0; s < 10; s++)
+      {
+        data[s] = rxpacket[s];
+        //printf("Data %" PRIu16": %" PRIu16 "\n", s ,data[s]);
+      }
+  }
+  else
+  {
     free(rxpacket);
-    //delete[] rxpacket;
+    return 0;
+  }
+  
+    //memcpy(data, &rxpacket[PKT_PARAMETER0], length);
+  //}
 
+  free(rxpacket);
+  //delete[] rxpacket;
   return result;
 }
 

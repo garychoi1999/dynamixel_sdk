@@ -529,6 +529,16 @@ class WINDECLSPEC Protocol1PacketHandler : public PacketHandler
   /// @return COMM_NOT_AVAILABLE
   ////////////////////////////////////////////////////////////////////////////////
   int bulkWriteTxOnly (PortHandler *port, uint8_t *param, uint16_t param_length);
+
+  int write_Vmode(PortHandler *port, uint16_t address, uint16_t data[], uint8_t *error = 0);
+
+  int txRxPacket_Vmode(PortHandler *port, uint8_t *txpacket, uint8_t *rxpacket, uint8_t *error = 0);
+
+  int txPacket_Vmode (PortHandler *port, uint8_t *txpacket);
+
+  int rxPacket_Vmode (PortHandler *port, uint8_t *rxpacket);
+
+  int readTxRx_Vmode (PortHandler *port, uint16_t address, uint16_t *data, uint8_t *error = 0);
 };
 
 }
